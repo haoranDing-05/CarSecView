@@ -15,6 +15,10 @@ export default function Home() {
   const decoder = new TextDecoder('utf-8');
   const [currentDate, setCurrentDate] = useState('');
   const [datePart, setDatePart] = useState('');
+  // 新增：节流时间戳引用
+  const throttleTimestampRef = useRef(0);
+  // 节流时间间隔（毫秒）
+  const throttleInterval = 300; 
 
   // 组件卸载时更新标志
   useEffect(() => {
@@ -142,9 +146,14 @@ export default function Home() {
   };
 
   const handleAttackTypeClick = (attackType) => {
-    fetchNewData(attackType);
-    fetchStreamData(attackType);
+    const now = Date.now();
+    if (now - throttleTimestampRef.current >= throttleInterval) {
+      fetchNewData(attackType);
+      fetchStreamData(attackType);
+      throttleTimestampRef.current = now;
+    }
   };
+
 
   if (showCover) {
     return (

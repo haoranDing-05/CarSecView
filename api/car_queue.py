@@ -5,10 +5,9 @@ import pandas as pd
 
 
 class TimeSlidingWindow:
-    def __init__(self, is_attack, window_size=30):
+    def __init__(self,  window_size=30):
         self.window_size = window_size
         self.data_queue = deque()
-        self.is_attack = is_attack
         self._is_full = False
 
     def add_data(self, data):
@@ -34,7 +33,7 @@ class TimeSlidingWindow:
             while index < self.get_window_size() and self.data_queue[index][0] < t_start + 3:
                 temp_data[self.data_queue[index][1]] += 1
                 temp_dlc[self.data_queue[index][3]] += 1
-                if self.is_attack and self.data_queue[index][-1] == 'T':
+                if self.data_queue[index][-1] == 'T':
                     flag = 0
                 index += 1
                 number += 1
