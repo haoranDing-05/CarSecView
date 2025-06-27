@@ -209,7 +209,7 @@ export default function Home() {
         
         <div className="flex-1 bg-gray-50 rounded-lg p-4 flex items-center justify-center text-gray-700 text-lg font-mono"  id="traffic-counter">
           <pre className="whitespace-pre-wrap">
-            {trafficData.split('\n').map((line, i) => {
+            {trafficData.split('\n').reverse().map((line, i) => {
               let color = 'text-gray-700';
               if (line.includes('\x1b[31m')) color = 'text-red-500';
               else if (line.includes('\x1b[33m')) color = 'text-yellow-500';
