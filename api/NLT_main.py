@@ -14,6 +14,7 @@ class likelihood_transformation:
         self.global_max = global_max
 
     def out(self, X):
+        X=np.array(X)
         M, N = X.shape  # 得到输入数据矩阵的形状（即行数和列数）
         mu_m = np.mean(X, axis=1)  # 求特征均值
         sigma_m = np.var(X, axis=1)  # 求特征方差
