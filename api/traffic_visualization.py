@@ -4,6 +4,8 @@ import torch
 import asyncio
 import datetime
 import aiofiles  # 用于异步文件操作
+import re
+import json
 import numpy as np
 from torch import nn
 from fastapi import FastAPI 
@@ -29,20 +31,15 @@ def init_model():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = LSTMAutoencoder(input_size, hidden_size, device)
     model.load_state_dict(torch.load(f'./model/{model_file}', map_location=device))
+    model=model.to(device)
     
     return model,device
-
-def init_data_acc():
-    while not message_queue.empty():
-        datas.add_data(message_queue.get_nowait())
-        if datas.is_full():
-            break
      
 message_queue = Queue()
 model,device = init_model()
 transfer=likelihood_transformation()
+transfer.set_global_max(0.09638328545934269)
 datas=TimeSlidingWindow()
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -52,38 +49,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
 #时间 ID DLC 数据1 数据2 数据3... 数据n
 async def generate_detect_result(file_path: str):#返回time,loss,label数据对
     yield "data: {\"message\": \"连接已建立，正在加载数据...\"}\n\n"
-    #处理数据的频率
-    init_data_acc()
-    pace=5#一秒五次
-    while True:
-        if(datas.is_full()):
+    async for data in add2queue(file_path):
+        datas.add_data(data)
+        if datas.is_full():
             current_time=datas.get_start_time()
             result,label=datas.get_result() 
             z=transfer.out(result) 
+            
             z=torch.from_numpy(z).float()
             if z.dim() == 1:
             # 转换为 [1, feature_dim, 1]（假设feature_dim=seq_len）
-                z=z.unsqueeze(0).unsqueeze(2)  # 添加batch和feature维度 
+                # z=z.unsqueeze(0).unsqueeze(2)  # 添加batch和feature维度 
+                # z=[1,z,1]
+                # z=np.array(z)
+                # z=torch.fcrom_numcy(z).float()
+                z = z.reshape(1, -1, 1) 
+            z=z.to(device)
             z_hat=model(z)
             criterion=nn.MSELoss()
             loss=criterion(z_hat,z)
-            label_predict=[1]*len(label)
-            if loss>0.0007:
+            label_predict=1
+            if loss>0.0004979983381813239:
                 label_predict=0
-            yield f"{current_time,float(loss),label,label_predict}\n"
-        else:
-            if not message_queue.empty():
-                data=message_queue.get_nowait()
-                datas.add_data(data)
+
+            if 0 in label:
+                label=0
             else:
-                async for data in add2queue(file_path):
-                    datas.add_data(data)
-                    if datas.is_full():
-                        break
-                
+                label=1
+            
+            yield f"data: {json.dumps({"time": current_time, "loss": float(loss), "label": label, "label_predict": label_predict})}\n\n"
+
+        
+#Dos攻击 模糊攻击 RPM攻击 Gear攻击 正常流量
 @app.get("/detect_attack")
 async def detect_attack(attack_type: str="正常流量"):
     """读取数据集并以流的形式返回"""
@@ -151,13 +153,80 @@ async def process_txt_line(line: str) -> list:
     dlc = [dlc_match.group(1)] if dlc_match else []
     dlc = [int(d) for d in dlc]
     # 提取数据字节
-    data_match = re.search(r'DLC: \d+\s+((?:[0-9a-f]{2}\s+)+)', line)
+    data_match = re.search(r'DLC: \d+\s+((?:[0-9a-f]{2}\s+)+(?:[0-9a-f]{2}))', line)
     data_bytes = data_match.group(1).strip().split() if data_match else []
     
     label=['R']
     # 合并所有元素到一个数组
     return timestamp + message_id + dlc + data_bytes+label
-
+    
+async def process_csv_line_add(line: str) -> list:
+    """处理CSV格式的单行数据"""
+    parts = line.strip().split(',')
+    if len(parts) >= 12:  # 确保行有足够的字段
+        try:
+            timestamp = float(parts[0])
+            _id = parts[1]
+            dlc = int(parts[2])
+            data_parts = [p for p in parts[3:3+dlc]]
+            label=parts[-1]
+            data_parts_str=""
+            for byte in data_parts:
+                data_parts_str+=byte
+            result=[timestamp, _id, dlc, data_parts_str,label]
+            return result
+        except ValueError:
+            return None
+    elif len(parts) >= 9:  # 处理字段较少的行
+        try:
+            timestamp = float(parts[0])
+            _id = parts[1]
+            dlc = int(parts[2])
+            data_parts = [p for p in parts[3:3+dlc+1]]
+            label=parts[-1]
+            data_parts_str=""
+            for byte in data_parts:
+                data_parts_str+=byte
+            result=timestamp + _id + dlc
+            result.append(data_parts_str)
+            result+=label 
+            return result
+        except ValueError:
+            return None
+    return None
+async def process_txt_line_add(line: str) -> list:
+    line = line.strip()
+    if not line:
+        return []
+    
+    # 提取时间戳
+    timestamp_match = re.search(r'Timestamp: (\d+\.\d+)', line)
+    timestamp = [timestamp_match.group(1)] if timestamp_match else []
+    timestamp = [float(t) for t in timestamp]
+    
+    # 提取ID
+    id_match = re.search(r'ID: (\w+)', line)
+    message_id = [id_match.group(1)] if id_match else []
+    # 提取DLC
+    dlc_match = re.search(r'DLC: (\d+)', line)
+    dlc = [dlc_match.group(1)] if dlc_match else []
+    dlc = [int(d) for d in dlc]
+    # 提取数据字节
+    data_match = re.search(r'DLC: \d+\s+((?:[0-9a-f]{2}\s+)+(?:[0-9a-f]{2}))', line)
+    data_bytes = data_match.group(1).strip().split() if data_match else []
+    
+    data_bytes_str=""
+    for byte in data_bytes:
+        data_bytes_str+=byte
+    label=['R']
+    
+    
+    result=timestamp + message_id + dlc 
+    result.append(data_bytes_str)
+    result+=label
+    # 合并所有元素到一个数组
+    return result
+    
 async def add2queue(file_path: str):
     # 初始数据，让客户端知道连接已建立
     previous_timestamp = None
@@ -165,9 +234,9 @@ async def add2queue(file_path: str):
     
     # 根据文件类型选择处理函数
     if file_path.endswith('.csv'):
-        process_line = process_csv_line
+        process_line = process_csv_line_add
     else:
-        process_line = process_txt_line
+        process_line = process_txt_line_add
     
     # 使用异步文件操作
     async with aiofiles.open(file_path, 'r') as f:
@@ -187,7 +256,6 @@ async def add2queue(file_path: str):
             if not processed_data:
                 continue
             timestamp = processed_data[0]
-            
             # 计算时间差
             if previous_timestamp is not None and first_data_sent:
                 time_diff = timestamp - previous_timestamp
@@ -196,12 +264,8 @@ async def add2queue(file_path: str):
                     await asyncio.sleep(1.0)  # 最大延迟1秒
                 else:
                     await asyncio.sleep(time_diff)
-            
-            previous_timestamp = timestamp
-            
-            # 格式化时间
-            current_time = datetime.datetime.fromtimestamp(time.time())
-            yield [processed_data[0],processed_data[1],processed_data[2],processed_data[-1]]
+                    
+            yield [processed_data[0],processed_data[1],processed_data[2],processed_data[3],processed_data[-1]]
         
 async def generate(file_path: str):
     # 初始数据，让客户端知道连接已建立

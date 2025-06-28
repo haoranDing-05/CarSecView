@@ -2,10 +2,10 @@
 
 import Image from "next/image";
 import { useEffect, useState, useRef } from "react";
-import { useState as useReactState } from "react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 export default function Home() {
-  const [showCover, setShowCover] = useReactState(true);
+  const [showCover, setShowCover] = useState(true);
   const [apiResponseMessage, setApiResponseMessage] = useState('');
   const [trafficData, setTrafficData] = useState('');
   const controllerRef = useRef(null); // 存储AbortController实例
@@ -19,6 +19,7 @@ export default function Home() {
   const throttleTimestampRef = useRef(0);
   // 节流时间间隔（毫秒）
   const throttleInterval = 300; 
+  const [lossChartData, setLossChartData] = useState([]); // 定义lossChartData状态
 
   // 组件卸载时更新标志
   useEffect(() => {
@@ -145,11 +146,57 @@ export default function Home() {
     }
   };
 
+  // 将fetchDetectResult函数移到组件内部，以便访问状态
+  const fetchDetectResult = async (attackType) => {
+    try {
+      const response = await fetch(`http://localhost:8000/detect_attack?attack_type=${attackType}`);
+      if (!response.body) return;
+      
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        
+        lines.forEach(line => {
+          if (line.startsWith('data:')) {
+            try {
+              const data = line.substring(6);
+              const json = JSON.parse(data);
+              if (json.message) {
+                setApiResponseMessage(json.message);
+              } else if (json.error) {
+                setApiResponseMessage(`错误: ${json.error}`);
+              } else if (json.time && typeof json.loss === 'number') {
+                const formattedTime = new Date(parseFloat(json.time) * 1000).toLocaleTimeString('en-US', { second: '2-digit' });
+                setLossChartData(prevData => {
+                  const newData = [...prevData, { time: formattedTime, loss: json.loss }];
+                  return newData.slice(-50); // 只保留最新的50个数据点
+                });
+              }
+            } catch (e) {
+              console.error("Failed to parse JSON or unexpected data format:", line, e);
+            }
+          }
+        });
+      }
+    } catch (error) {
+      console.error('获取检测结果失败:', error);
+    }
+  };
+
   const handleAttackTypeClick = (attackType) => {
     const now = Date.now();
     if (now - throttleTimestampRef.current >= throttleInterval) {
       fetchNewData(attackType);
       fetchStreamData(attackType);
+      fetchDetectResult(attackType); // 新增：调用数据检测函数
       throttleTimestampRef.current = now;
     }
   };
@@ -224,7 +271,6 @@ export default function Home() {
               else if (line.includes('\x1b[33m')& line.includes('T')) color = 'text-yellow-500';
               else if (line.includes('\x1b[35m')& line.includes('T')) color = 'text-green-500';
               else if (line.includes('\x1b[34m')& line.includes('T')) color = 'text-purple-500';
-              {/*else if (line.includes('\x1b[32m')) color = 'text-green-500';*/}
               
               const cleanLine = line.replace(/\x1b\[[0-9;]*m/g, '');
               return <div key={i} className={`${color}`}>{cleanLine}</div>;
@@ -251,12 +297,14 @@ export default function Home() {
 
         {/* 检测数据展示区 - 现代仪表盘设计 */}
         <div className="flex-1 bg-white rounded-xl shadow-sm p-6 transition-all duration-300 hover:shadow-md">
-          <h2 className="text-xl font-semibold text-gray-800 mb-6">安全检测数据</h2>
-          {apiResponseMessage && (
-            <div className="mb-4 p-3 bg-blue-100 text-blue-800 rounded-lg">
-              {apiResponseMessage}
-            </div>
-          )}
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-semibold text-gray-800">安全检测数据</h2>
+            {apiResponseMessage && (
+              <span className="ml-4 p-2 bg-blue-100 text-blue-800 rounded-lg text-base font-semibold">
+                  {apiResponseMessage}
+                </span>
+            )}
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {[
               { label: '异常流量', value: '0', color: 'red' },
@@ -281,6 +329,20 @@ export default function Home() {
               暂无检测到的攻击数据。
             </div>
           </div>
+        </div>
+        
+        {/* 动态折线图区域 */}
+        <div className="flex-1 bg-white rounded-xl shadow-sm p-6 mt-4" style={{ height: '300px' }}>
+          <h3 className="text-lg font-semibold mb-2">Loss-时间 动态折线图</h3>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={lossChartData} margin={{ top: 10, right: 30, left: 20, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="time" tick={{ fontSize: 12 }} label={{ value: "时间 (秒)", position: "insideBottom", offset: 0 }} />
+              <YAxis tick={{ fontSize: 12 }} label={{ value: "Loss", angle: -90, position: "insideLeft" }} />
+              <Tooltip />
+              <Line type="monotone" dataKey="loss" stroke="#8884d8" dot={true} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       </div>
     </div>
