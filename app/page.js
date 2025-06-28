@@ -219,12 +219,12 @@ export default function Home() {
         <div className="flex-1 bg-gray-50 rounded-lg p-4 flex items-center justify-center text-gray-700 text-lg font-mono"  id="traffic-counter">
           <pre className="whitespace-pre-wrap">
             {trafficData.split('\n').reverse().map((line, i) => {
-              let color = 'text-gray-700';
-              if (line.includes('\x1b[31m')) color = 'text-red-500';
-              else if (line.includes('\x1b[33m')) color = 'text-yellow-500';
-              else if (line.includes('\x1b[35m')) color = 'text-purple-500';
-              else if (line.includes('\x1b[34m')) color = 'text-blue-500';
-              else if (line.includes('\x1b[32m')) color = 'text-green-500';
+              let color = 'text-black-400';
+              if (line.includes('\x1b[31m') & line.includes('T')) color = 'text-red-500';
+              else if (line.includes('\x1b[33m')& line.includes('T')) color = 'text-yellow-500';
+              else if (line.includes('\x1b[35m')& line.includes('T')) color = 'text-green-500';
+              else if (line.includes('\x1b[34m')& line.includes('T')) color = 'text-purple-500';
+              {/*else if (line.includes('\x1b[32m')) color = 'text-green-500';*/}
               
               const cleanLine = line.replace(/\x1b\[[0-9;]*m/g, '');
               return <div key={i} className={`${color}`}>{cleanLine}</div>;
