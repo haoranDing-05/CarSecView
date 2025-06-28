@@ -34,10 +34,8 @@ def init_model():
 
 def init_data_acc():
     while not message_queue.empty():
-        print("not empty")
         datas.add_data(message_queue.get_nowait())
         if datas.is_full():
-            print("full")
             break
      
 message_queue = Queue()
@@ -59,20 +57,16 @@ async def generate_detect_result(file_path: str):#返回time,loss,label数据对
     yield "data: {\"message\": \"连接已建立，正在加载数据...\"}\n\n"
     #处理数据的频率
     init_data_acc()
-    
     pace=5#一秒五次
     while True:
         if(datas.is_full()):
             current_time=datas.get_start_time()
             result,label=datas.get_result() 
             z=transfer.out(result) 
-            print("b")
             z=torch.from_numpy(z).float()
-            print("c")
             if z.dim() == 1:
             # 转换为 [1, feature_dim, 1]（假设feature_dim=seq_len）
-                z=z.unsqueeze(0).unsqueeze(2)  # 添加batch和feature维度  
-                print("d")
+                z=z.unsqueeze(0).unsqueeze(2)  # 添加batch和feature维度 
             z_hat=model(z)
             criterion=nn.MSELoss()
             loss=criterion(z_hat,z)
@@ -84,7 +78,6 @@ async def generate_detect_result(file_path: str):#返回time,loss,label数据对
             if not message_queue.empty():
                 data=message_queue.get_nowait()
                 datas.add_data(data)
-                print(message_queue.size())
             else:
                 async for data in add2queue(file_path):
                     datas.add_data(data)
@@ -101,8 +94,7 @@ async def detect_attack(attack_type: str="正常流量"):
             yield f"data: {{\"error\": \"{str(e)}\"}}\\n\\n"
         return StreamingResponse(error_generator(), media_type="text/event-stream")
     return StreamingResponse(generate_detect_result(file_path), media_type="text/event-stream")
-
-           
+      
 def get_file_path(attack_type: str) -> str:
     """根据攻击类型获取对应的文件路径"""
     if attack_type == "Dos攻击":
@@ -167,7 +159,6 @@ async def process_txt_line(line: str) -> list:
     return timestamp + message_id + dlc + data_bytes+label
 
 async def add2queue(file_path: str):
-    print("add2q")
     # 初始数据，让客户端知道连接已建立
     previous_timestamp = None
     first_data_sent = False
@@ -212,8 +203,10 @@ async def add2queue(file_path: str):
             current_time = datetime.datetime.fromtimestamp(time.time())
             yield [processed_data[0],processed_data[1],processed_data[2],processed_data[-1]]
         
-async def generate_flow(file_path: str):
+async def generate(file_path: str):
     # 初始数据，让客户端知道连接已建立
+    yield "data: {\"message\": \"连接已建立，正在加载数据...\"}\n\n"
+    
     previous_timestamp = None
     first_data_sent = False
     
@@ -255,26 +248,23 @@ async def generate_flow(file_path: str):
             
             # 格式化时间
             current_time = datetime.datetime.fromtimestamp(time.time())
-            message_queue.put_nowait([current_time.timestamp(), processed_data[1],processed_data[2],processed_data[-1]])
             current_time = current_time.strftime('%Y-%m-%d %H:%M:%S')
             data_part,time_part=current_time.split(' ',1)
             #这个是label
             label=processed_data[-1]
-            #yield f"date_part:{current_time}\n"
+            yield f"date_part:{current_time}\n"
 
             # 构建并发送数据
             # 移除"data: "前缀和JSON结构，直接输出CSV格式
-            # data_str = (f"{time_part},"
-            #             f"ID:{processed_data[1]},"
-            #             f"DLC:{int(processed_data[2])},"
-            #             f"{','.join(str(processed_data[i]) for i in range(3, int(processed_data[2]) + 3))},"
-            #             f"{label}\n")
-            # yield f"{data_str}\n"
-            yield f"{processed_data}"
+            data_str = (f"{time_part},"
+                        f"ID:{processed_data[1]},"
+                        f"DLC:{int(processed_data[2])},"
+                        f"{','.join(str(processed_data[i]) for i in range(3, int(processed_data[2]) + 3))},"
+                        f"{label}\n")
+            yield f"{data_str}\n"
             first_data_sent = True
     # 发送结束标记
     yield "data: {\"message\": \"数据传输完成\"}\n\n"
-    print("generate_over")
 
 @app.get("/read_dataset")
 async def read_dataset(attack_type: str = "Dos攻击"):
