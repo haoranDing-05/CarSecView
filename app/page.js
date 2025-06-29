@@ -316,14 +316,7 @@ export default function Home() {
               </div>
             ))}
           </div>
-          {/* 攻击数据展示容器 */}
-          <div className="mt-8">
-            <div className="text-base font-semibold text-red-600 mb-2">检测攻击数据</div>
-            <div className="p-4 bg-red-50 rounded-lg min-h-[60px] border border-red-200 text-red-700 text-base font-mono shadow-inner">
-              {/* 这里将来可动态渲染检测到的攻击数据 */}
-              暂无检测到的攻击数据。
-            </div>
-          </div>
+
         </div>
         
         {/* 动态折线图区域 */}
@@ -333,7 +326,7 @@ export default function Home() {
             <LineChart data={lossChartData} margin={{ top: 10, right: 30, left: 20, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="time" tick={{ fontSize: 12 }} label={{ value: "时间 (秒)", position: "insideBottom", offset: 0 }} />
-              <YAxis tick={{ fontSize: 12 }} label={{ value: "Loss", angle: -90, position: "insideLeft" }} />
+              <YAxis tick={{ fontSize: 12 }} label={{ value: "Loss", angle: -90, position: "insideLeft" }} domain={[0, 0.08]} />
               <Tooltip />
               <Line type="monotone" dataKey="loss" stroke="#8884d8" dot={true} isAnimationActive={false} />
             </LineChart>
