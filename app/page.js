@@ -165,23 +165,18 @@ export default function Home() {
         buffer = lines.pop();
         
         lines.forEach(line => {
-          if (line.startsWith('data:')) {
-            try {
-              const data = line.substring(6);
-              const json = JSON.parse(data);
-              if (json.message) {
-                setApiResponseMessage(json.message);
-              } else if (json.error) {
-                setApiResponseMessage(`错误: ${json.error}`);
-              } else if (json.time && typeof json.loss === 'number') {
-                const formattedTime = new Date(parseFloat(json.time) * 1000).toLocaleTimeString('en-US', { second: '2-digit' });
-                setLossChartData(prevData => {
-                  const newData = [...prevData, { time: formattedTime, loss: json.loss }];
-                  return newData.slice(-50); // 只保留最新的50个数据点
-                });
-              }
-            } catch (e) {
-              console.error("Failed to parse JSON or unexpected data format:", line, e);
+          // 后端返回格式为 f"{current_time,float(loss),label,label_predict}\n"
+          // 例如：1700000000.0,0.00123,1,1
+          const parts = line.split(',');
+          if (parts.length >= 2) {
+            const timeValue = parts[0];
+            const lossValue = parseFloat(parts[1]);
+            if (!isNaN(lossValue)) {
+              const formattedTime = new Date(parseFloat(timeValue) * 1000).toLocaleTimeString('zh-CN', { hour12: false });
+              setLossChartData(prevData => {
+                const newData = [...prevData, { time: formattedTime, loss: lossValue }];
+                return newData.slice(-50);
+              });
             }
           }
         });
