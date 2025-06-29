@@ -4,24 +4,20 @@ import torch
 import asyncio
 import datetime
 import aiofiles  # 用于异步文件操作
-import re
-import json
 import numpy as np
 from torch import nn
 from fastapi import FastAPI 
 from api.LSTM import LSTMAutoencoder
-from multiprocessing import Queue
 from api.car_queue import TimeSlidingWindow
 from sklearn.metrics import confusion_matrix
 from api.NLT_main import likelihood_transformation
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from api.car_hacking_process_data import car_hacking_process_data
-###sleep一个时间差 ai好像写了查一下
-###读一次数据在传到前端时，队列从头积累数据，队列从尾取出数据，
-#按照频率对数据进行处理，得到z输入模型得到z'计算loss 和预先知道的阈值对比判断一个标签'
-###每次先初始化填充一些数据
-###需要测试一下txt最后一个是否为R
+#正常流量的read_detect是错的
+#切换后要清空数据积累重新积累
+#攻击csv的处理没有给dlc为2的加上T或R
+#封面组名 校标 制作人
 app = FastAPI()
 
 def init_model():
@@ -31,11 +27,10 @@ def init_model():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = LSTMAutoencoder(input_size, hidden_size, device)
     model.load_state_dict(torch.load(f'./model/{model_file}', map_location=device))
-    model=model.to(device)
-    
+    model.to(device)
+    model.eval()
     return model,device
      
-message_queue = Queue()
 model,device = init_model()
 transfer=likelihood_transformation()
 transfer.set_global_max(0.09638328545934269)
@@ -48,42 +43,34 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-
+#切换或者重启都不传
 #时间 ID DLC 数据1 数据2 数据3... 数据n
 async def generate_detect_result(file_path: str):#返回time,loss,label数据对
-    yield "data: {\"message\": \"连接已建立，正在加载数据...\"}\n\n"
     async for data in add2queue(file_path):
         datas.add_data(data)
         if datas.is_full():
             current_time=datas.get_start_time()
             result,label=datas.get_result() 
-            z=transfer.out(result) 
-            
-            z=torch.from_numpy(z).float()
-            if z.dim() == 1:
-            # 转换为 [1, feature_dim, 1]（假设feature_dim=seq_len）
-                # z=z.unsqueeze(0).unsqueeze(2)  # 添加batch和feature维度 
-                # z=[1,z,1]
-                # z=np.array(z)
-                # z=torch.fcrom_numcy(z).float()
-                z = z.reshape(1, -1, 1) 
-            z=z.to(device)
-            z_hat=model(z)
-            criterion=nn.MSELoss()
-            loss=criterion(z_hat,z)
-            label_predict=1
-            if loss>0.0004979983381813239:
-                label_predict=0
+            if(result):
+                z=transfer.out(result) 
+                z=torch.from_numpy(z).float()
+                if z.dim() == 1:
+                    z = z.view(1, -1, 1) 
+                z=z.to(device)
+                z_hat=model(z)
+                #加载慢是模型计算慢 还是异步的问题 不应该有关系
+                criterion=nn.MSELoss()
+                loss=criterion(z_hat,z)
+                label_predict=1
+                if loss>0.0004979983381813239:
+                    label_predict=0
 
-            if 0 in label:
-                label=0
-            else:
-                label=1
-            
-            yield f"data: {json.dumps({"time": current_time, "loss": float(loss), "label": label, "label_predict": label_predict})}\n\n"
-
+                if 0 in label:
+                    label=0
+                else:
+                    label=1
+                    
+                yield f"{current_time,float(loss),label,label_predict}\n"
         
 #Dos攻击 模糊攻击 RPM攻击 Gear攻击 正常流量
 @app.get("/detect_attack")
@@ -194,6 +181,7 @@ async def process_csv_line_add(line: str) -> list:
         except ValueError:
             return None
     return None
+
 async def process_txt_line_add(line: str) -> list:
     line = line.strip()
     if not line:
@@ -224,7 +212,6 @@ async def process_txt_line_add(line: str) -> list:
     result=timestamp + message_id + dlc 
     result.append(data_bytes_str)
     result+=label
-    # 合并所有元素到一个数组
     return result
     
 async def add2queue(file_path: str):
@@ -242,6 +229,7 @@ async def add2queue(file_path: str):
     async with aiofiles.open(file_path, 'r') as f:
         first_line = True
         line_count = 0
+        time_diff=0
         
         async for line in f:
             # 跳过CSV文件的标题行
@@ -252,20 +240,26 @@ async def add2queue(file_path: str):
             line_count += 1
             # 处理当前行
             processed_data = await process_line(line)
-            
             if not processed_data:
                 continue
             timestamp = processed_data[0]
             # 计算时间差
             if previous_timestamp is not None and first_data_sent:
                 time_diff = timestamp - previous_timestamp
+                if(time_diff<0):
+                    time_diff=0
                 # 限制最大延迟，避免过长等待
                 if time_diff > 1.0:
                     await asyncio.sleep(1.0)  # 最大延迟1秒
                 else:
                     await asyncio.sleep(time_diff)
-                    
-            yield [processed_data[0],processed_data[1],processed_data[2],processed_data[3],processed_data[-1]]
+            previous_timestamp = timestamp
+            
+            current_time = time.time()
+            new_timestamp=current_time+time_diff
+        
+            #切换数据导致的不同数据集的原始时间戳的先后关系 会将datas中的队列清空 试图用当前时间戳代替原始时间戳
+            yield [new_timestamp,processed_data[1],processed_data[2],processed_data[3],processed_data[-1]]
         
 async def generate(file_path: str):
     # 初始数据，让客户端知道连接已建立
