@@ -19,23 +19,24 @@ class LSTMAutoencoder(nn.Module):
         batch_size, seq_len, _ = x.size()
 
         # 初始化隐藏状态
-        h_enc, c_enc = self.init_hidden(batch_size)
+        h_enc, c_enc, c_tidle_enc = self.init_hidden(batch_size)
 
         # 编码器前向传播
         # encoder_outputs = []
         for t in range(seq_len):
             input_t = x[:, t, :]
-            h_enc, c_enc = self.encoder(input_t, h_enc, c_enc)
+            h_enc, c_enc, c_tidle_enc = self.encoder(input_t, h_enc, c_enc, c_tidle_enc)
             # encoder_outputs.append(h_enc)
 
         # 解码器前向传播
         decoder_outputs = []
         h_dec = h_enc
         c_dec = c_enc
+        c_tidle_dec = c_tidle_enc
         decoder_input = h_dec
 
         for t in range(seq_len):
-            h_dec, c_dec = self.decoder(decoder_input, h_dec, c_dec)
+            h_dec, c_dec, c_tidle_dec = self.decoder(decoder_input, h_dec, c_dec, c_tidle_dec)
             output_t = self.reconstruct(h_dec)
             decoder_outputs.append(output_t)
             decoder_input = h_dec
@@ -48,7 +49,8 @@ class LSTMAutoencoder(nn.Module):
         # 初始化隐藏状态和细胞状态
         h = torch.zeros(batch_size, self.hidden_size, device=self.device)
         c = torch.zeros(batch_size, self.hidden_size, device=self.device)
-        return h, c
+        c_tidle = torch.zeros(batch_size, self.hidden_size, device=self.device)
+        return h, c, c_tidle
 
 
 class CustomLSTMLayer(nn.Module):
@@ -80,7 +82,7 @@ class CustomLSTMLayer(nn.Module):
         # 初始化权重
         self._initialize_weights()
 
-    def forward(self, x, h_prev, c_prev):
+    def forward(self, x, h_prev, c_prev, c_prev_tilde):
         # 计算遗忘门
         f_t = torch.sigmoid(self.W_f(x) + self.V_f(h_prev) + self.b_f)
         # 计算输入门
@@ -90,10 +92,10 @@ class CustomLSTMLayer(nn.Module):
         # 计算细胞状态候选值
         c_tilde = torch.tanh(self.W_c(x) + self.V_c(h_prev) + self.b_c)
         # 更新细胞状态
-        c_next = (f_t * c_prev) + (i_t * c_tilde)
+        c_next = (f_t * c_prev) + (i_t * c_prev_tilde)
         # 计算隐藏状态
         h_next = o_t * torch.tanh(c_next)
-        return h_next, c_next
+        return h_next, c_next, c_tilde
 
     def _initialize_weights(self):
         for name, param in self.named_parameters():
