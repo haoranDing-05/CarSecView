@@ -68,7 +68,6 @@ export default function Home() {
     
     try {
       if (isMountedRef.current) {
-        setTrafficData('正在加载数据...');
       }
       // 2. 创建新的AbortController实例
       controllerRef.current = new AbortController();
@@ -275,7 +274,7 @@ export default function Home() {
       </div>
 
       {/* 右侧内容容器 */}
-      <div className="md:w-2/3 flex flex-col gap-6">
+      <div className="md:w-2/3 flex flex-col gap-2">
         {/* 攻击类型按钮组 - 现代胶囊按钮设计 */}
         <div className="flex flex-wrap gap-3">
           {['Dos攻击', '模糊攻击', 'RPM攻击', 'Gear攻击', '正常流量'].map((type) => (
@@ -323,7 +322,7 @@ export default function Home() {
         <div className="flex-1 bg-white rounded-xl shadow-sm p-6 mt-4" style={{ height: '300px' }}>
           <h3 className="text-lg font-semibold mb-2">Loss-时间 动态折线图</h3>
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={lossChartData} margin={{ top: 10, right: 30, left: 20, bottom: 5 }}>
+            <LineChart data={lossChartData} margin={{ top: 10, right: 30, left: 20, bottom: 20 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="time" tick={{ fontSize: 12 }} label={{ value: "时间 (秒)", position: "insideBottom", offset: 0 }} />
               <YAxis tick={{ fontSize: 12 }} label={{ value: "Loss", angle: -90, position: "insideLeft" }} domain={[0, 0.08]} />

@@ -83,7 +83,6 @@ class CustomLSTMLayer(nn.Module):
         self._initialize_weights()
 
     def forward(self, x, h_prev, c_prev, c_prev_tilde):
-
         # 计算遗忘门
         f_t = torch.sigmoid(self.W_f(x) + self.V_f(h_prev) + self.b_f)
         # 计算输入门

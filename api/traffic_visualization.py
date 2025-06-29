@@ -8,15 +8,23 @@ import numpy as np
 from torch import nn
 from fastapi import FastAPI 
 from api.LSTM import LSTMAutoencoder
-from api.car_queue import TimeSlidingWindow
+from api.car_queue import CarQueue,StrideNode
 from sklearn.metrics import confusion_matrix
 from api.NLT_main import likelihood_transformation
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from api.car_hacking_process_data import car_hacking_process_data
-#正常流量的read_detect是错的
+
+import os
+from typing import Dict, List, Any, Optional
+# 全局文件缓存
+FILE_CACHE = {}
+# 缓存过期时间(秒)，0表示永不过期
+CACHE_EXPIRE_TIME = 3600  # 1小时
+# 缓存状态记录
+CACHE_STATUS = {}
 #切换后要清空数据积累重新积累
-#攻击csv的处理没有给dlc为2的加上T或R
+#先塞30秒数据
+#为什么只在切换后右边刷新比左边快
 #封面组名 校标 制作人
 app = FastAPI()
 
@@ -34,7 +42,9 @@ def init_model():
 model,device = init_model()
 transfer=likelihood_transformation()
 transfer.set_global_max(0.09638328545934269)
-datas=TimeSlidingWindow()
+stride_time = 1
+size = int(30 / stride_time)
+car_queue=CarQueue(max_len=size, stride=stride_time)
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,34 +54,168 @@ app.add_middleware(
     allow_headers=["*"],
 )
 #切换或者重启都不传
-#时间 ID DLC 数据1 数据2 数据3... 数据n
-async def generate_detect_result(file_path: str):#返回time,loss,label数据对
-    async for data in add2queue(file_path):
-        datas.add_data(data)
-        if datas.is_full():
-            current_time=datas.get_start_time()
-            result,label=datas.get_result() 
-            if(result):
-                z=transfer.out(result) 
-                z=torch.from_numpy(z).float()
-                if z.dim() == 1:
-                    z = z.view(1, -1, 1) 
-                z=z.to(device)
-                z_hat=model(z)
-                #加载慢是模型计算慢 还是异步的问题 不应该有关系
-                criterion=nn.MSELoss()
-                loss=criterion(z_hat,z)
-                label_predict=1
-                if loss>0.0004979983381813239:
-                    label_predict=0
 
-                if 0 in label:
-                    label=0
-                else:
-                    label=1
-                    
-                yield f"{current_time,float(loss),label,label_predict}\n"
+async def preload_files():#用于预读取文件
+    """预加载所有数据集文件到缓存"""
+    attack_types = ["Dos攻击", "模糊攻击", "RPM攻击", "Gear攻击", "正常流量"]
+    for attack_type in attack_types:
+        try:
+            file_path = get_file_path(attack_type)
+            await preload_file(file_path, attack_type)
+            CACHE_STATUS[attack_type] = {
+                "status": "loaded",
+                "time": time.time(),
+                "file_size": os.path.getsize(file_path) if os.path.exists(file_path) else 0
+            }
+            print(f"成功预加载文件: {file_path}")
+        except Exception as e:
+            CACHE_STATUS[attack_type] = {
+                "status": "failed",
+                "error": str(e),
+                "time": time.time()
+            }
+            print(f"预加载文件 {file_path} 失败: {str(e)}")
+
+async def preload_file(file_path: str, cache_key: str):
+    """预加载单个文件到缓存"""
+    if file_path.endswith('.csv'):
+        process_line = process_csv_line_add
+    else:
+        process_line = process_txt_line_add
+    
+    data = []
+    async with aiofiles.open(file_path, 'r') as f:
+        first_line = True
+        line_count = 0
         
+        async for line in f:
+            if first_line and file_path.endswith('.csv'):
+                first_line = False
+                continue
+            
+            processed_data = await process_line(line)
+            if processed_data:
+                data.append(processed_data)
+                line_count += 1
+            
+            # 分批次处理，避免大文件一次性加载导致内存问题
+            if line_count % 1000 == 0:
+                await asyncio.sleep(0)  # 让出控制权，避免阻塞
+    
+    # 存储到缓存，包含数据和加载时间
+    FILE_CACHE[cache_key] = {
+        "data": data,
+        "loaded_time": time.time(),
+        "line_count": line_count
+    }
+    print(f"预加载完成: {file_path}, 行数: {line_count}")
+
+def is_cache_valid(cache_key: str) -> bool:
+    """检查缓存是否有效"""
+    if cache_key not in FILE_CACHE:
+        return False
+    
+    if CACHE_EXPIRE_TIME == 0:
+        return True
+    
+    return time.time() - FILE_CACHE[cache_key]["loaded_time"] < CACHE_EXPIRE_TIME
+
+def get_cached_data(cache_key: str) -> Optional[List[Any]]:
+    """从缓存获取数据"""
+    if cache_key in FILE_CACHE and is_cache_valid(cache_key):
+        return FILE_CACHE[cache_key]["data"]
+    return None
+
+# #时间 ID DLC 数据1 数据2 数据3... 数据n
+async def generate_detect_result(file_path: str):#返回time,loss,label数据对
+    cache_key = os.path.basename(file_path)
+    cached_data = get_cached_data(cache_key)
+    stride_node = StrideNode(stride_time)
+    start_time = time.time()
+    result = []
+    label = []
+    current_time = 0
+    if not cached_data:
+        # 如果缓存中没有数据，从文件读取并添加到缓存
+        async for data in add2queue(file_path):
+            new_data = data
+            if current_time == 0:
+                current_time = new_data[0]
+            if start_time + stride_time > new_data[0]:
+                stride_node.add_data(new_data)
+            else:
+                car_queue.append(stride_node)
+                if len(car_queue) == size:
+                    result, label = car_queue.get_result()
+                start_time += stride_time
+                while start_time + stride_time < new_data[0]:
+                    stride_node = StrideNode(stride_time)
+                    car_queue.append(stride_node)
+                    start_time += stride_time
+                stride_node = StrideNode(stride_time)
+                stride_node.add_data(new_data)
+
+                if(result):
+                    z=transfer.out(result) 
+                    z=torch.from_numpy(z).float()
+                    if z.dim() == 1:
+                        z = z.view(1, -1, 1) 
+                    z=z.to(device)
+                    z_hat=model(z)
+                    #加载慢是模型计算慢 还是异步的问题 不应该有关系
+                    criterion=nn.MSELoss()
+                    loss=criterion(z_hat,z)
+                    label_predict=1
+                    if loss>0.0004979983381813239:
+                        label_predict=0
+
+                    if 0 in label:
+                        label=0
+                    else:
+                        label=1
+                        
+                    yield f"{current_time,float(loss),label,label_predict}\n"
+
+    else:
+        # 从缓存中读取数据
+        for data in cached_data:
+            new_data = data
+            if start_time + stride_time > new_data[0]:
+                stride_node.add_data(new_data)
+            else:
+                car_queue.append(stride_node)
+                if len(car_queue) == size:
+                    result, label = car_queue.get_result()
+                    results.extend(result)
+                    labels.extend(label)
+                start_time += stride_time
+                while start_time + stride_time < new_data[0]:
+                    stride_node = StrideNode(stride_time)
+                    car_queue.append(stride_node)
+                    start_time += stride_time
+                stride_node = StrideNode(stride_time)
+                stride_node.add_data(new_data)
+
+                if(result):
+                    z=transfer.out(result) 
+                    z=torch.from_numpy(z).float()
+                    if z.dim() == 1:
+                        z = z.view(1, -1, 1) 
+                    z=z.to(device)
+                    z_hat=model(z)
+                    #加载慢是模型计算慢 还是异步的问题 不应该有关系
+                    criterion=nn.MSELoss()
+                    loss=criterion(z_hat,z)
+                    label_predict=1
+                    if loss>0.0004979983381813239:
+                        label_predict=0
+
+                    if 0 in label:
+                        label=0
+                    else:
+                        label=1
+                        
+                    yield f"{current_time,float(loss),label,label_predict}\n"
 #Dos攻击 模糊攻击 RPM攻击 Gear攻击 正常流量
 @app.get("/detect_attack")
 async def detect_attack(attack_type: str="正常流量"):
@@ -84,6 +228,25 @@ async def detect_attack(attack_type: str="正常流量"):
         return StreamingResponse(error_generator(), media_type="text/event-stream")
     return StreamingResponse(generate_detect_result(file_path), media_type="text/event-stream")
       
+@app.get("/preload")
+async def preload():
+    """手动触发预加载所有文件"""
+    await preload_files()
+    return {"status": "preloading", "cache_status": CACHE_STATUS}
+
+@app.get("/cache_status")
+async def cache_status():
+    """获取当前缓存状态"""
+    return {"cache_status": CACHE_STATUS, "cache_size": len(FILE_CACHE)}
+
+@app.get("/clear_cache")
+async def clear_cache():
+    """清除所有缓存"""
+    global FILE_CACHE, CACHE_STATUS
+    FILE_CACHE = {}
+    CACHE_STATUS = {}
+    return {"status": "cleared", "cache_size": 0}
+
 def get_file_path(attack_type: str) -> str:
     """根据攻击类型获取对应的文件路径"""
     if attack_type == "Dos攻击":
@@ -155,7 +318,7 @@ async def process_csv_line_add(line: str) -> list:
             timestamp = float(parts[0])
             _id = parts[1]
             dlc = int(parts[2])
-            data_parts = [p for p in parts[3:3+dlc]]
+            data_parts = [p for p in parts[3:3+dlc+1]]
             label=parts[-1]
             data_parts_str=""
             for byte in data_parts:
@@ -254,7 +417,7 @@ async def add2queue(file_path: str):
                 else:
                     await asyncio.sleep(time_diff)
             previous_timestamp = timestamp
-            
+            print(processed_data)
             current_time = time.time()
             new_timestamp=current_time+time_diff
         
@@ -262,9 +425,6 @@ async def add2queue(file_path: str):
             yield [new_timestamp,processed_data[1],processed_data[2],processed_data[3],processed_data[-1]]
         
 async def generate(file_path: str):
-    # 初始数据，让客户端知道连接已建立
-    yield "data: {\"message\": \"连接已建立，正在加载数据...\"}\n\n"
-    
     previous_timestamp = None
     first_data_sent = False
     
@@ -321,8 +481,7 @@ async def generate(file_path: str):
                         f"{label}\n")
             yield f"{data_str}\n"
             first_data_sent = True
-    # 发送结束标记
-    yield "data: {\"message\": \"数据传输完成\"}\n\n"
+
 
 @app.get("/read_dataset")
 async def read_dataset(attack_type: str = "Dos攻击"):

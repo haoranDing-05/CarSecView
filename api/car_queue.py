@@ -1,69 +1,90 @@
-import time
 from collections import deque, defaultdict
+
 import numpy as np
-import pandas as pd
 
 
-class TimeSlidingWindow:
-    def __init__(self,  window_size=30):
-        self.window_size = window_size
-        self.data_queue = deque()
-        self._is_full = False
+def calculate_combined_stats(sizes, means, stds):
+    # 验证输入的合法性
+    if not (len(means) == len(stds) == len(sizes)):
+        raise ValueError("均值、标准差和样本量的列表长度必须相同")
 
-    def add_data(self, data):
-        current_time = data[0]
-        # 移除过期数据（时间戳早于当前时间-窗口大小的数据）
-        while self.data_queue and current_time - self.get_start_time() > self.window_size:
-            self.data_queue.popleft()
-            self._is_full = True
-        # 添加新数据（数据+当前时间戳）
-        self.data_queue.append(data)
+    # 计算总体均值
+    total_size = sum(sizes)
+    combined_mean = sum(m * n for m, n in zip(means, sizes)) / total_size
+
+    # 计算总体标准差
+    sum_sq_dev = sum(n * (std ** 2 + (m - combined_mean) ** 2) for m, std, n in zip(means, stds, sizes))
+    combined_std = np.sqrt(sum_sq_dev / total_size)
+
+    return combined_mean, combined_std
+
+
+class StrideNode:
+    def __init__(self, stride):
+        self.stride = stride
+        self.unique_id = set()
+        self.temp_dlc = defaultdict(int)
+        self.number = 0
+        self.label = 1
+        self.start_time = None
+
+    def add_data(self, new_data):
+        if self.start_time is None:
+            self.start_time = new_data[0]
+        if new_data[-1] == 'T':
+            self.label = 0
+        self.unique_id.add(new_data[1])
+        self.temp_dlc[new_data[3]] += 1
+        self.number += 1
 
     def get_result(self):
-        t_start = self.get_start_time()
-        t_end = self.get_end_time()
-        result = []
-        label = []
+        return [self.label, self.unique_id, self.temp_dlc, self.number]
+
+    def is_full(self, new_data):
+        if self.number == 0:
+            return False
+        if new_data[0] - self.start_time > self.stride:
+            return True
+        else:
+            return False
+
+
+class CarQueue(deque):
+    def __init__(self, max_len, stride, window_size=3):
+        self.max_len = max_len
+        self.node_len = int(window_size / stride)
+        self.before = None
+        super().__init__(maxlen=max_len)
+
+    def get_result(self):
         index = 0
-        while t_start <= t_end:
-            temp_data = defaultdict(int)
-            temp_dlc = defaultdict(int)
+        results = []
+        labels = []
+        while index < self.max_len:
             number = 0
-            flag = 1
-            while index < self.get_window_size() and self.data_queue[index][0] < t_start + 3:
-                temp_data[self.data_queue[index][1]] += 1
-                temp_dlc[self.data_queue[index][3]] += 1
-                if self.data_queue[index][-1] == 'T':
-                    flag = 0
+            label = 1
+            unique_id = set()
+            temp_dlc = defaultdict(int)
+            for i in range(self.node_len):
+                # print(temp)
+                temp = self[index].get_result()
+                for can in temp[1]:
+                    unique_id.add(can)
+                for k, v in temp[2].items():
+                    temp_dlc[k] += v
+                if temp[0] == 0:
+                    label = 0
                 index += 1
-                number += 1
+                number += temp[3]
+            temp_dlc_1 = np.array([v for v in temp_dlc.values()])
+            if number > 50:
+                temp_res = [len(unique_id), np.mean(temp_dlc_1), np.std(temp_dlc_1)]
+                self.before = temp_res
+            else:
+                temp_res = self.before
+            results.append(temp_res)
+            labels.append(label)
 
-            if temp_data and number >= 50:
-                # start_time = time.time()
-                temp_dlc_1 = np.array([v for v in temp_dlc.values()])
-                # print(time.time()-start_time)
-                # temp_dlc = temp_dlc.groupby([0]).size()
-                temp_res = [len(temp_data), np.mean(temp_dlc_1), np.std(temp_dlc_1)]
-                result.append(temp_res)
-                label.append(flag)
-
-            t_start += 3
-        return result, label
-
-    def get_window_data(self):
-        return [item for item in self.data_queue]
-
-    def get_window_size(self):
-        return len(self.data_queue)
-
-    def get_start_time(self):
-        return self.data_queue[0][0]
-
-    def get_end_time(self):
-        return self.data_queue[-1][0]
-
-    def is_full(self):
-        return self._is_full
-
-    def test(self):
-        print(self.data_queue[-1][0] - self.data_queue[0][0])
+            # print(results)
+        print(len(results))
+        return results, labels
