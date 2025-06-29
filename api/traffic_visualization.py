@@ -82,7 +82,7 @@ async def generate_detect_result(file_path: str):#返回time,loss,label数据对
             else:
                 label=1
             
-            yield f"data: {json.dumps({"time": current_time, "loss": float(loss), "label": label, "label_predict": label_predict})}\n\n"
+            yield f"{current_time,float(loss.item()),label,label_predict}\n"
 
         
 #Dos攻击 模糊攻击 RPM攻击 Gear攻击 正常流量
