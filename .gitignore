@@ -1,0 +1,4 @@
+/node_modules/
+/api/__pycache__/
+/test/
+/.next/
