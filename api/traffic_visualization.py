@@ -38,14 +38,73 @@ def init_model():
     model.to(device)
     model.eval()
     return model,device
-     
-model,device = init_model()
-transfer=likelihood_transformation()
-transfer.set_global_max(0.09638328545934269)
+
 stride_time = 1
 size = int(30 / stride_time)
 car_queue=CarQueue(max_len=size, stride=stride_time)
+stride_node = StrideNode(stride_time)
+start_time = time.time()
+current_time = 0
+model,device = init_model()
+transfer=likelihood_transformation()
+transfer.set_global_max(0.09638328545934269)
 
+
+async def add2queue(file_path: str):
+    # 初始数据，让客户端知道连接已建立
+    previous_timestamp = None
+    first_data_sent = False
+    
+    # 根据文件类型选择处理函数
+    if file_path.endswith('.csv'):
+        process_line = process_csv_line_add
+    else:
+        process_line = process_txt_line_add
+    # 使用异步文件操作
+    async with aiofiles.open(file_path, 'r') as f:
+        time_diff = 0
+        first_line = True
+        line_count = 0
+        real_time=time.time()
+        async for line in f:
+            # 跳过CSV文件的标题行
+            if first_line and file_path.endswith('.csv'):
+                first_line = False
+                continue
+            line_count += 1
+            # 处理当前行
+            processed_data = await process_line(line)
+            if not processed_data:
+                continue
+            timestamp = processed_data[0]
+            # 计算时间差
+            if previous_timestamp is not None and first_data_sent:
+                time_diff = timestamp - previous_timestamp
+                if(time_diff<0):
+                    time_diff=0
+                # 限制最大延迟，避免过长等待
+                if time_diff > 1.0:
+                    await asyncio.sleep(1.0)  # 最大延迟1秒
+                else:
+                    await asyncio.sleep(time_diff)
+            previous_timestamp = timestamp
+            new_timestamp=real_time+time_diff
+            #切换数据导致的不同数据集的原始时间戳的先后关系 会将datas中的队列清空 试图用当前时间戳代替原始时间戳
+            yield [new_timestamp,processed_data[1],processed_data[2],processed_data[3],processed_data[-1]]
+    
+async def init_queue():
+    for data in add2queue("../test/normal_run_data.txt"):
+        new_data = data
+        current_time = new_data[0]
+        if start_time + stride_time > new_data[0]:
+            stride_node.add_data(new_data)
+        else:
+            car_queue.append(stride_node)
+            if len(car_queue) == size:
+                break
+            
+init_queue()    
+        
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -54,7 +113,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 #切换或者重启都不传
-
 async def preload_files():#用于预读取文件
     """预加载所有数据集文件到缓存"""
     attack_types = ["Dos攻击", "模糊攻击", "RPM攻击", "Gear攻击", "正常流量"]
@@ -139,8 +197,7 @@ async def generate_detect_result(file_path: str):#返回time,loss,label数据对
         # 如果缓存中没有数据，从文件读取并添加到缓存
         async for data in add2queue(file_path):
             new_data = data
-            if current_time == 0:
-                current_time = new_data[0]
+            current_time = new_data[0]
             if start_time + stride_time > new_data[0]:
                 stride_node.add_data(new_data)
             else:
@@ -279,7 +336,7 @@ async def process_csv_line(line: str) -> list:
             timestamp = float(parts[0])
             _id = parts[1]
             dlc = int(parts[2])
-            data_parts = [p for p in parts[3:3+dlc]]
+            data_parts = [p for p in parts[3:3+dlc+1]]
             return [timestamp, _id, dlc] + data_parts
         except ValueError:
             return None
@@ -376,53 +433,6 @@ async def process_txt_line_add(line: str) -> list:
     result.append(data_bytes_str)
     result+=label
     return result
-    
-async def add2queue(file_path: str):
-    # 初始数据，让客户端知道连接已建立
-    previous_timestamp = None
-    first_data_sent = False
-    
-    # 根据文件类型选择处理函数
-    if file_path.endswith('.csv'):
-        process_line = process_csv_line_add
-    else:
-        process_line = process_txt_line_add
-    
-    # 使用异步文件操作
-    async with aiofiles.open(file_path, 'r') as f:
-        first_line = True
-        line_count = 0
-        time_diff=0
-        
-        async for line in f:
-            # 跳过CSV文件的标题行
-            if first_line and file_path.endswith('.csv'):
-                first_line = False
-                continue
-            
-            line_count += 1
-            # 处理当前行
-            processed_data = await process_line(line)
-            if not processed_data:
-                continue
-            timestamp = processed_data[0]
-            # 计算时间差
-            if previous_timestamp is not None and first_data_sent:
-                time_diff = timestamp - previous_timestamp
-                if(time_diff<0):
-                    time_diff=0
-                # 限制最大延迟，避免过长等待
-                if time_diff > 1.0:
-                    await asyncio.sleep(1.0)  # 最大延迟1秒
-                else:
-                    await asyncio.sleep(time_diff)
-            previous_timestamp = timestamp
-            print(processed_data)
-            current_time = time.time()
-            new_timestamp=current_time+time_diff
-        
-            #切换数据导致的不同数据集的原始时间戳的先后关系 会将datas中的队列清空 试图用当前时间戳代替原始时间戳
-            yield [new_timestamp,processed_data[1],processed_data[2],processed_data[3],processed_data[-1]]
         
 async def generate(file_path: str):
     previous_timestamp = None
@@ -481,7 +491,6 @@ async def generate(file_path: str):
                         f"{label}\n")
             yield f"{data_str}\n"
             first_data_sent = True
-
 
 @app.get("/read_dataset")
 async def read_dataset(attack_type: str = "Dos攻击"):
