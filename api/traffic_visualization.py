@@ -429,7 +429,7 @@ async def add2queue(file_path: str):
                 else:
                     await asyncio.sleep(time_diff)
             previous_timestamp = timestamp
-            print(processed_data)
+            #print(processed_data)
             current_time = time.time()
             new_timestamp=current_time+time_diff
         
@@ -483,7 +483,12 @@ async def generate(file_path: str):
             data_part,time_part=current_time.split(' ',1)
             #这个是label
             label=processed_data[-1]
+            #print(label,type(label))
             yield f"date_part:{current_time}\n"
+            if('T'in label):
+                label=0
+            else:
+                label=1
 
             # 构建并发送数据
             # 移除"data: "前缀和JSON结构，直接输出CSV格式
@@ -493,6 +498,7 @@ async def generate(file_path: str):
                         f"{','.join(str(processed_data[i]) for i in range(3, int(processed_data[2]) + 3))},"
                         f"{label}\n")
             yield f"{data_str}\n"
+            #print(data_str)
             first_data_sent = True
 
 

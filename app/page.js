@@ -147,6 +147,7 @@ export default function Home() {
               newData.push(formattedLine);
             }
           }
+          console.log('newData', newData);
         });
 
         receivedLinesRef.current = [
@@ -206,8 +207,8 @@ export default function Home() {
                   const newData = [...prev, { 
                     time: timeStr, 
                     loss: parseFloat(data.loss),
-                    label: data.label || 0,
-                    predict: data.predict || 0,
+                    label: data.label,
+                    predict: data.predict,
                     attackType: attackType
                   }];
                   return newData.filter(item => item.attackType === attackType).slice(-30);
