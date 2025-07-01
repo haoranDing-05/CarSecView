@@ -140,14 +140,13 @@ export default function Home() {
                 time: parts[0].trim(),
                 id: parts[1].replace('ID:', '').trim(),
                 dlc: parts[2].replace('DLC:', '').trim(),
-                data: parts[3].trim(),
-                label: parts[4] ? parts[4].trim() : 'N/A',
+                data: parts.slice(3, parts.length - 1).map(part => part.trim()), // 修改部分
+                label: parts[parts.length-1] ? parts[parts.length-1].trim() : 'N/A',
                 attackType: attackType
               };
               newData.push(formattedLine);
             }
           }
-          console.log('newData', newData);
         });
 
         receivedLinesRef.current = [
@@ -330,9 +329,8 @@ export default function Home() {
               .slice()
               .reverse()
               .map((line, i) => {
-                const isAttack = line.label == 0;
+                const isAttack=line.label == 0;
                 const isNormal = line.label == 1;
-                
                 return (
                   <div 
                     key={i} 
